@@ -1,35 +1,79 @@
 import json
 from datetime import datetime, timedelta
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, ConversationHandler
+    ContextTypes, filters, ConversationHandler, CallbackQueryHandler
 )
 from telegram.constants import ParseMode
 from config import API_TOKEN
 
-USERS_FILE = "users.json"
+DATA_FILE = "data.json"
+FUTURE_FILE = "future.json"
+HISTORY_FILE = "history.json"
 
-# ======== Работа с данными пользователей ========
-def load_user_data(user_id):
+# ======== Работа с балансом ========
+def load_balance(user_id):
     try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
+        with open(DATA_FILE, "r") as f:
             data = json.load(f)
-        return data.get(str(user_id), {"balance": 0, "history": [], "future": []})
-    except FileNotFoundError:
-        return {"balance": 0, "history": [], "future": []}
-    except json.JSONDecodeError:
-        return {"balance": 0, "history": [], "future": []}
+        return data.get(str(user_id), {}).get("balance", 0)
+    except:
+        return 0
 
-def save_user_data(user_id, user_data):
+def save_balance(user_id, balance):
     try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
+        with open(DATA_FILE, "r") as f:
             data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except:
         data = {}
-    data[str(user_id)] = user_data
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    if str(user_id) not in data:
+        data[str(user_id)] = {}
+
+    data[str(user_id)]["balance"] = balance
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
+# ======== Работа с историей ========
+def load_history(user_id):
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            data = json.load(f)
+        return data.get(str(user_id), [])
+    except:
+        return []
+
+def save_history(user_id, history):
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            data = json.load(f)
+    except:
+        data = {}
+
+    data[str(user_id)] = history
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(data, f)
+
+# ======== Работа с предстоящими операциями ========
+def load_future(user_id):
+    try:
+        with open(FUTURE_FILE, "r") as f:
+            data = json.load(f)
+        return data.get(str(user_id), [])
+    except:
+        return []
+
+def save_future(user_id, future):
+    try:
+        with open(FUTURE_FILE, "r") as f:
+            data = json.load(f)
+    except:
+        data = {}
+
+    data[str(user_id)] = future
+    with open(FUTURE_FILE, "w") as f:
+        json.dump(data, f)
 
 # ======== Меню ========
 def main_menu():
@@ -37,35 +81,72 @@ def main_menu():
         ["📊 Баланс", "🗓 Прогноз баланса"],
         ["➕ Добавить операцию", "📋 История"]
     ]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def add_operation_menu():
     keyboard = [
         ["➖ Добавить расход", "➕ Добавить доход"],
         ["⏳ Добавить предстоящую операцию", "🔙 Назад"]
     ]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def future_menu():
     keyboard = [
         ["➕ Предстоящий доход", "➖ Предстоящий расход"],
         ["📋 Список предстоящих", "🔙 Назад"]
     ]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def forecast_menu():
     keyboard = [
         ["📅 Через неделю", "📅 Через месяц"],
         ["📅 Через 3 месяца", "🔙 Назад"]
     ]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ======== Состояния ========
-CHOOSING_INCOME, CHOOSING_EXPENSE, FUTURE_AMOUNT_DATE = range(3)
+CHOOSING_INCOME, CHOOSING_EXPENSE, FUTURE_AMOUNT, FUTURE_DATE = range(4)
 
-# ======== Хэндлеры ========
+# ======== Календарь ========
+def build_calendar(year=None, month=None):
+    now = datetime.now()
+    year = year or now.year
+    month = month or now.month
+
+    keyboard = []
+    # Заголовок
+    keyboard.append([InlineKeyboardButton(f"{year}-{month:02d}", callback_data="ignore")])
+    # Дни недели
+    keyboard.append([InlineKeyboardButton(d, callback_data="ignore") for d in ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]])
+
+    month_calendar = []
+    first_day = datetime(year, month, 1)
+    start_day = first_day.weekday()
+    days_in_month = (datetime(year if month < 12 else year + 1, (month % 12) + 1, 1) - timedelta(days=1)).day
+
+    row = []
+    for _ in range(start_day):
+        row.append(InlineKeyboardButton(" ", callback_data="ignore"))
+
+    for day in range(1, days_in_month + 1):
+        row.append(InlineKeyboardButton(str(day), callback_data=f"date_{year}-{month:02d}-{day:02d}"))
+        if len(row) == 7:
+            month_calendar.append(row)
+            row = []
+    if row:
+        month_calendar.append(row)
+
+    keyboard.extend(month_calendar)
+    # Управление месяцами
+    keyboard.append([
+        InlineKeyboardButton("<", callback_data=f"prev_{year}_{month}"),
+        InlineKeyboardButton(">", callback_data=f"next_{year}_{month}")
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+# ======== Команды ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_first_name = (update.effective_user.first_name or "").strip()
+    user_first_name = update.message.from_user.first_name or ""
     welcome_text = (
         f"Привет, *{user_first_name}*! 👋\n\n"
         "Смотри, что я умею:\n\n"
@@ -75,69 +156,65 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 Смотреть историю операций\n\n"
         "*Просто нажми на нужную кнопку, чтобы начать!*"
     )
-    await update.message.reply_text(welcome_text, reply_markup=main_menu(), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=main_menu(),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
-# Баланс и история
+# ======== Баланс и история ========
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = load_user_data(user_id)
-    await update.message.reply_text(f"Ваш текущий баланс: {user['balance']} ₽")
+    user_id = update.message.from_user.id
+    balance = load_balance(user_id)
+    await update.message.reply_text(f"Ваш текущий баланс: {balance} ₽")
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = load_user_data(user_id)
-    history = user.get("history", [])
+    user_id = update.message.from_user.id
+    history = load_history(user_id)
     if not history:
         await update.message.reply_text("История операций пуста.")
-        return
-    text = "История операций:\n"
-    for op in history:
-        # опционально можно добавить дату/время, если нужно
-        text += f"{op['type']}: {op['amount']} ₽\n"
-    await update.message.reply_text(text)
+    else:
+        text = "История операций:\n"
+        for op in history:
+            text += f"{op['type']}: {op['amount']} ₽\n"
+        await update.message.reply_text(text)
 
-# Прогноз
+# ======== Прогноз ========
 async def forecast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выберите период прогноза:", reply_markup=forecast_menu())
 
 async def handle_forecast_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
     text = update.message.text
     now = datetime.now()
-    user_id = update.effective_user.id
-    user = load_user_data(user_id)
 
     if text == "📅 Через неделю":
         target_date = now + timedelta(weeks=1)
     elif text == "📅 Через месяц":
         target_date = now + timedelta(days=30)
     elif text == "📅 Через 3 месяца":
-        # можно заменить на точное прибавление 3 календарных месяцев через dateutil.relativedelta
-        target_date = now + timedelta(days=90)
+        target_date = now + timedelta(days=120)
     elif text == "🔙 Назад":
         await update.message.reply_text("Возврат в главное меню", reply_markup=main_menu())
         return
     else:
-        return  # не наша кнопка — игнорируем
+        return
 
-    balance = user.get("balance", 0)
-    future_ops = user.get("future", [])
-
-    # Учитываем только валидные будущие операции с корректной датой
-    for op in future_ops:
+    balance = load_balance(user_id)
+    future = load_future(user_id)
+    for op in future:
         try:
             op_date = datetime.strptime(op["date"], "%Y-%m-%d")
-        except Exception:
-            # пропускаем некорректную дату
+            if op_date <= target_date:
+                balance += op["amount"] if op["type"] == "доход" else -op["amount"]
+        except:
             continue
-        if op_date <= target_date:
-            if op["type"] == "доход":
-                balance += op["amount"]
-            else:
-                balance -= op["amount"]
 
-    await update.message.reply_text(f"Прогнозируемый баланс на {target_date.strftime('%d.%m.%Y')}: {balance} ₽")
+    await update.message.reply_text(
+        f"Прогнозируемый баланс на {target_date.strftime('%d.%m.%Y')}: {balance} ₽"
+    )
 
-# Мгновенные операции — показываем подменю или запрашиваем сумму
+# ======== Мгновенные операции ========
 async def instant_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
@@ -145,142 +222,157 @@ async def instant_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Выберите действие:", reply_markup=add_operation_menu())
         return ConversationHandler.END
 
-    if text == "➕ Добавить доход":
+    elif text == "➕ Добавить доход":
         await update.message.reply_text("Введите сумму дохода:")
         return CHOOSING_INCOME
 
-    if text == "➖ Добавить расход":
+    elif text == "➖ Добавить расход":
         await update.message.reply_text("Введите сумму расхода:")
         return CHOOSING_EXPENSE
 
-    if text == "⏳ Добавить предстоящую операцию":
+    elif text == "⏳ Добавить предстоящую операцию":
         await update.message.reply_text("Меню предстоящих операций:", reply_markup=future_menu())
         return ConversationHandler.END
 
-    if text == "🔙 Назад":
+    elif text == "🔙 Назад":
         await update.message.reply_text("Возврат в главное меню", reply_markup=main_menu())
         return ConversationHandler.END
 
-# Добавление мгновенного дохода/расхода
+# ======== Добавление мгновенного дохода/расхода ========
 async def add_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = load_user_data(user_id)
-    text = update.message.text
+    user_id = update.message.from_user.id
     try:
-        amount = float(text)
-    except Exception:
+        amount = float(update.message.text)
+        balance = load_balance(user_id)
+        balance += amount
+        save_balance(user_id, balance)
+        history = load_history(user_id)
+        history.append({"type": "доход", "amount": amount})
+        save_history(user_id, history)
+        await update.message.reply_text(f"Доход добавлен. Новый баланс: {balance} ₽", reply_markup=add_operation_menu())
+    except ValueError:
         await update.message.reply_text("Введите корректное число.")
         return CHOOSING_INCOME
-
-    user["balance"] += amount
-    user.setdefault("history", []).append({"type": "доход", "amount": amount, "ts": datetime.now().isoformat()})
-    save_user_data(user_id, user)
-
-    await update.message.reply_text(f"Доход добавлен. Новый баланс: {user['balance']} ₽", reply_markup=add_operation_menu())
     return ConversationHandler.END
 
 async def add_expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = load_user_data(user_id)
-    text = update.message.text
+    user_id = update.message.from_user.id
     try:
-        amount = float(text)
-    except Exception:
+        amount = float(update.message.text)
+        balance = load_balance(user_id)
+        balance -= amount
+        save_balance(user_id, balance)
+        history = load_history(user_id)
+        history.append({"type": "расход", "amount": amount})
+        save_history(user_id, history)
+        await update.message.reply_text(f"Расход добавлен. Новый баланс: {balance} ₽", reply_markup=add_operation_menu())
+    except ValueError:
         await update.message.reply_text("Введите корректное число.")
         return CHOOSING_EXPENSE
-
-    user["balance"] -= amount
-    user.setdefault("history", []).append({"type": "расход", "amount": amount, "ts": datetime.now().isoformat()})
-    save_user_data(user_id, user)
-
-    await update.message.reply_text(f"Расход добавлен. Новый баланс: {user['balance']} ₽", reply_markup=add_operation_menu())
     return ConversationHandler.END
 
-# Предстоящие операции (теперь привязаны к пользователю)
+# ======== Предстоящие операции ========
 async def handle_future_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
     text = update.message.text
-    user_id = update.effective_user.id
-    user = load_user_data(user_id)
 
     if text in ["➕ Предстоящий доход", "➖ Предстоящий расход"]:
-        # сохраняем тип в session для последующего ввода "сумма на дата"
         context.user_data["future_last_command"] = "доход" if "доход" in text else "расход"
-        await update.message.reply_text("Введите сумму и дату в формате: сумма на YYYY-MM-DD (например: 1000 на 2025-10-01)")
-        return FUTURE_AMOUNT_DATE
+        await update.message.reply_text("Введите сумму:")
+        return FUTURE_AMOUNT
 
-    if text == "📋 Список предстоящих":
-        future = user.get("future", [])
+    elif text == "📋 Список предстоящих":
+        future = load_future(user_id)
         if not future:
             await update.message.reply_text("Список предстоящих операций пуст.")
-            return
-        text_list = "Список предстоящих операций:\n"
-        for op in future:
-            text_list += f"{op['type']}: {op['amount']} ₽ на {op['date']}\n"
-        await update.message.reply_text(text_list)
-        return
-
-    if text == "🔙 Назад":
+        else:
+            text_list = "Список предстоящих операций:\n"
+            for op in future:
+                text_list += f"{op['type']}: {op['amount']} ₽ на {op['date']}\n"
+            await update.message.reply_text(text_list)
+    elif text == "🔙 Назад":
         await update.message.reply_text("Возврат в меню 'Добавить операцию'", reply_markup=add_operation_menu())
-        return
 
-    # Если сюда попали — возможно пользователь ввёл строку "сумма на YYYY-MM-DD"
-    if "на" in text:
-        try:
-            amount_str, date_str = text.split("на", 1)
-            amount = float(amount_str.strip())
-            date = date_str.strip()
-            # проверим формат даты
-            datetime.strptime(date, "%Y-%m-%d")
-        except Exception:
-            await update.message.reply_text("Неправильный формат. Используйте: сумма на YYYY-MM-DD (например: 1000 на 2025-10-01)")
-            return
+async def future_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = float(update.message.text)
+        context.user_data["future_amount"] = amount
+        await update.message.reply_text("Выберите дату:", reply_markup=build_calendar())
+        return FUTURE_DATE
+    except ValueError:
+        await update.message.reply_text("Введите корректное число.")
+        return FUTURE_AMOUNT
 
+async def future_date_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data.startswith("date_"):
+        date_str = query.data.replace("date_", "")
         op_type = context.user_data.get("future_last_command")
-        if op_type is None:
-            await update.message.reply_text("Сначала выберите тип операции (предстоящий доход или расход).")
-            return
+        amount = context.user_data.get("future_amount")
 
-        user.setdefault("future", []).append({"type": op_type, "amount": amount, "date": date})
-        save_user_data(user_id, user)
-        await update.message.reply_text(f"Предстоящая операция добавлена: {op_type} {amount} ₽ на {date}", reply_markup=future_menu())
-        return
+        future = load_future(user_id)
+        future.append({"type": op_type, "amount": amount, "date": date_str})
+        save_future(user_id, future)
 
-    # Другие сообщения игнорируем
-    return
+        await query.edit_message_text(f"Предстоящая операция добавлена: {op_type} {amount} ₽ на {date_str}")
+        return ConversationHandler.END
 
-# ======== Регистрация хэндлеров и запуск ========
+    elif query.data.startswith("prev_") or query.data.startswith("next_"):
+        parts = query.data.split("_")
+        year, month = int(parts[1]), int(parts[2])
+        if query.data.startswith("prev_"):
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        else:
+            month += 1
+            if month == 13:
+                month = 1
+                year += 1
+        await query.edit_message_reply_markup(reply_markup=build_calendar(year, month))
+        return FUTURE_DATE
+
+# ======== Настройка приложения ========
 app = ApplicationBuilder().token(API_TOKEN).build()
 
 # Основные команды
 app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.Regex("📊 Баланс"), show_balance))
+app.add_handler(MessageHandler(filters.Regex("📋 История"), show_history))
+app.add_handler(MessageHandler(filters.Regex("🗓 Прогноз баланса"), forecast_start))
 
-# ВАЖНО: регистрируем хэндлер прогнозов раньше хэндлера будущих операций,
-# чтобы кнопки "📅 ..." не перехватывались обработчиком будущих операций.
-app.add_handler(MessageHandler(filters.Regex(r"^📅 Через неделю$|^📅 Через месяц$|^📅 Через 3 месяца$|^🔙 Назад$"), handle_forecast_buttons))
-app.add_handler(MessageHandler(filters.Regex("^🗓 Прогноз баланса$"), forecast_start))
+# Мгновенные операции
+app.add_handler(MessageHandler(filters.Regex("➕ Добавить операцию|⏳ Добавить предстоящую операцию|🔙 Назад"), instant_operation))
 
-# Основные кнопки / меню
-app.add_handler(MessageHandler(filters.Regex("^📊 Баланс$"), show_balance))
-app.add_handler(MessageHandler(filters.Regex("^📋 История$"), show_history))
-app.add_handler(MessageHandler(filters.Regex("^➕ Добавить операцию$"), instant_operation))
-app.add_handler(MessageHandler(filters.Regex("^⏳ Добавить предстоящую операцию$|^🔙 Назад$"), instant_operation))
-
-# ConversationHandlers для мгновенных операций (вход — нажатие кнопки, затем ввод суммы)
+# ConversationHandlers для дохода/расхода
 app.add_handler(ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("^➕ Добавить доход$"), instant_operation)],
+    entry_points=[MessageHandler(filters.Regex("➕ Добавить доход"), instant_operation)],
     states={CHOOSING_INCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_income_amount)]},
     fallbacks=[]
 ))
 app.add_handler(ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("^➖ Добавить расход$"), instant_operation)],
+    entry_points=[MessageHandler(filters.Regex("➖ Добавить расход"), instant_operation)],
     states={CHOOSING_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense_amount)]},
     fallbacks=[]
 ))
 
-# Предстоящие операции: ловим кнопки и строки формата "сумма на дата"
-# Добавляем негативную проверку на начало с "📅", но поскольку прогнозные хэндлеры зарегистрированы раньше — это дополнительная страховка.
-future_pattern = r"^(➕ Предстоящий доход|➖ Предстоящий расход|📋 Список предстоящих|🔙 Назад|.*\bна\b.*)$"
-app.add_handler(MessageHandler(filters.Regex(future_pattern), handle_future_buttons))
+# Предстоящие операции
+app.add_handler(ConversationHandler(
+    entry_points=[MessageHandler(filters.Regex("➕ Предстоящий доход|➖ Предстоящий расход"), handle_future_buttons)],
+    states={
+        FUTURE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, future_amount)],
+        FUTURE_DATE: [CallbackQueryHandler(future_date_handler)]
+    },
+    fallbacks=[]
+))
+app.add_handler(MessageHandler(filters.Regex("📋 Список предстоящих|🔙 Назад"), handle_future_buttons))
 
-# Запуск
+# Прогноз
+app.add_handler(MessageHandler(filters.Regex("📅 Через неделю|📅 Через месяц|📅 Через 3 месяца|🔙 Назад"), handle_forecast_buttons))
+
+# ======== Запуск ========
 app.run_polling()
