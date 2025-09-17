@@ -76,7 +76,7 @@ def future_menu():
 def forecast_menu():
     keyboard = [
         ["📅 Через неделю", "📅 Через месяц"],
-        ["📅 Через 4 месяца", "🔙 Назад"]
+        ["📅 Через квартал", "🔙 Назад"]
     ]
     return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
 
@@ -128,7 +128,8 @@ async def handle_forecast_buttons(update: Update, context: ContextTypes.DEFAULT_
         target_date = now + timedelta(weeks=1)
     elif text == "📅 Через месяц":
         target_date = now + timedelta(days=30)
-    elif text == "📅 Через 4 месяца":
+    elif text == "📅 Через квартал":
+        # квартал условно = 120 дней (как в предыдущей логике); при желании можно заменить на более точный подсчёт
         target_date = now + timedelta(days=120)
     elif text == "🔙 Назад":
         await update.message.reply_text("Возврат в главное меню", reply_markup=main_menu())
@@ -224,17 +225,19 @@ async def handle_future_buttons(update: Update, context: ContextTypes.DEFAULT_TY
     elif text == "🔙 Назад":
         await update.message.reply_text("Возврат в меню 'Добавить операцию'", reply_markup=add_operation_menu())
     else:
-        try:
-            amount_str, date_str = text.split("на")
-            amount = float(amount_str.strip())
-            date = date_str.strip()
-            op_type = context.user_data.get("future_last_command")
-            future = load_future()
-            future.append({"type": op_type, "amount": amount, "date": date})
-            save_future(future)
-            await update.message.reply_text(f"Предстоящая операция добавлена: {op_type} {amount} ₽ на {date}")
-        except Exception:
-            await update.message.reply_text("Неправильный формат. Используйте: сумма на YYYY-MM-DD")
+        # Проверяем формат "сумма на дата"
+        if "на" in text:
+            try:
+                amount_str, date_str = text.split("на")
+                amount = float(amount_str.strip())
+                date = date_str.strip()
+                op_type = context.user_data.get("future_last_command")
+                future = load_future()
+                future.append({"type": op_type, "amount": amount, "date": date})
+                save_future(future)
+                await update.message.reply_text(f"Предстоящая операция добавлена: {op_type} {amount} ₽ на {date}")
+            except Exception:
+                await update.message.reply_text("Неправильный формат. Используйте: сумма на YYYY-MM-DD")
 
 # ======== Настройка приложения ========
 app = ApplicationBuilder().token(API_TOKEN).build()
@@ -262,15 +265,15 @@ app.add_handler(ConversationHandler(
     fallbacks=[]
 ))
 
-# Предстоящие операции
+# Предстоящие операции (фильтр оставлен таким, чтобы ловить сообщения с цифрами формата "сумма на YYYY-MM-DD")
 future_filter = filters.Regex(
     "➕ Предстоящий доход|➖ Предстоящий расход|📋 Список предстоящих|\\d+.*|🔙 Назад"
 )
 app.add_handler(MessageHandler(future_filter, handle_future_buttons))
 
-# Прогноз
+# Прогноз (обновлён: 'Через квартал')
 forecast_filter = filters.Regex(
-    "📅 Через неделю|📅 Через месяц|📅 Через 4 месяца|🔙 Назад"
+    "📅 Через неделю|📅 Через месяц|📅 Через квартал|🔙 Назад"
 )
 app.add_handler(MessageHandler(forecast_filter, handle_forecast_buttons))
 
