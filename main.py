@@ -85,8 +85,6 @@ CHOOSING_INCOME, CHOOSING_EXPENSE, FUTURE_AMOUNT_DATE = range(3)
 
 # ======== Команды ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message is None:
-        return
     user_first_name = update.message.from_user.first_name or ""
     welcome_text = (
         f"Привет, *{user_first_name}*! 👋\n\n"
@@ -135,6 +133,8 @@ async def handle_forecast_buttons(update: Update, context: ContextTypes.DEFAULT_
     elif text == "🔙 Назад":
         await update.message.reply_text("Возврат в главное меню", reply_markup=main_menu())
         return
+    else:
+        return  # Игнорируем лишние сообщения
 
     balance = load_balance()
     future = load_future()
@@ -146,7 +146,9 @@ async def handle_forecast_buttons(update: Update, context: ContextTypes.DEFAULT_
         except:
             continue
 
-    await update.message.reply_text(f"Прогнозируемый баланс на {target_date.strftime('%d.%m.%Y')}: {balance} ₽")
+    await update.message.reply_text(
+        f"Прогнозируемый баланс на {target_date.strftime('%d.%m.%Y')}: {balance} ₽"
+    )
 
 # ======== Мгновенные операции ========
 async def instant_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -243,12 +245,12 @@ app.add_handler(MessageHandler(filters.Regex("📊 Баланс"), show_balance)
 app.add_handler(MessageHandler(filters.Regex("📋 История"), show_history))
 app.add_handler(MessageHandler(filters.Regex("🗓 Прогноз баланса"), forecast_start))
 
-# Мгновенные операции (только меню)
+# Мгновенные операции
 app.add_handler(MessageHandler(filters.Regex(
     "➕ Добавить операцию|⏳ Добавить предстоящую операцию|🔙 Назад"
 ), instant_operation))
 
-# ConversationHandlers для мгновенного дохода/расхода
+# ConversationHandlers для дохода/расхода
 app.add_handler(ConversationHandler(
     entry_points=[MessageHandler(filters.Regex("➕ Добавить доход"), instant_operation)],
     states={CHOOSING_INCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_income_amount)]},
@@ -261,14 +263,16 @@ app.add_handler(ConversationHandler(
 ))
 
 # Предстоящие операции
-app.add_handler(MessageHandler(filters.Regex(
+future_filter = filters.Regex(
     "➕ Предстоящий доход|➖ Предстоящий расход|📋 Список предстоящих|\\d+.*|🔙 Назад"
-), handle_future_buttons))
+)
+app.add_handler(MessageHandler(future_filter, handle_future_buttons))
 
 # Прогноз
-app.add_handler(MessageHandler(filters.Regex(
+forecast_filter = filters.Regex(
     "📅 Через неделю|📅 Через месяц|📅 Через 4 месяца|🔙 Назад"
-), handle_forecast_buttons))
+)
+app.add_handler(MessageHandler(forecast_filter, handle_forecast_buttons))
 
 # ======== Запуск ========
 app.run_polling()
