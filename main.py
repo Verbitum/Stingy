@@ -1,221 +1,232 @@
 import json
-from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, filters, ConversationHandler
+)
+from telegram.constants import ParseMode
+from config import API_TOKEN
 
 DATA_FILE = "data.json"
 FUTURE_FILE = "future.json"
+HISTORY_FILE = "history.json"
 
-# ======== Работа с текущим балансом ========
+# ======== Работа с балансом ========
 def load_balance():
     try:
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
         return data.get("balance", 0)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except:
         return 0
 
 def save_balance(balance):
     with open(DATA_FILE, "w") as f:
         json.dump({"balance": balance}, f)
 
-# ======== Работа с предстоящими операциями ========
-def load_future_operations():
+# ======== Работа с историей ========
+def load_history():
     try:
-        with open(FUTURE_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        with open(HISTORY_FILE, "r") as f:
+            data = json.load(f)
+        return data.get("history", [])
+    except:
         return []
 
-def save_future_operations(operations):
+def save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump({"history": history}, f)
+
+# ======== Работа с предстоящими операциями ========
+def load_future():
+    try:
+        with open(FUTURE_FILE, "r") as f:
+            data = json.load(f)
+        return data.get("future", [])
+    except:
+        return []
+
+def save_future(future):
     with open(FUTURE_FILE, "w") as f:
-        json.dump(operations, f, ensure_ascii=False, indent=2)
+        json.dump({"future": future}, f)
+
+# ======== Меню ========
+def main_menu():
+    keyboard = [
+        ["📊 Баланс", "🗓 Прогноз баланса"],
+        ["➕ Добавить операцию", "📋 История"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+
+def add_operation_menu():
+    keyboard = [
+        ["➖ Добавить расход", "➕ Добавить доход"],
+        ["⏳ Добавить предстоящую операцию", "🔙 Назад"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+
+def future_menu():
+    keyboard = [
+        ["➕ Предстоящий доход", "➖ Предстоящий расход"],
+        ["📋 Список предстоящих", "🔙 Назад"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
 
 # ======== Состояния ========
-CHOOSING_INCOME, CHOOSING_EXPENSE = range(2)
-CHOOSING_FUTURE_INCOME, CHOOSING_FUTURE_EXPENSE = range(2, 4)
+CHOOSING_ACTION, CHOOSING_INCOME, CHOOSING_EXPENSE, FUTURE_MENU, FUTURE_AMOUNT_DATE = range(5)
 
 # ======== Команды ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message is None:
-        return
-
-    user_name = update.effective_user.first_name
-    keyboard = [
-        ["💸 Добавить расход", "💰 Добавить доход"],
-        ["📊 Баланс", "➕ Добавить предстоящие операции"],
-        ["📋 Список операций", "📅 Прогноз баланса"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
-
-    await update.message.reply_text(
-        f"Привет, {user_name}! 👋\n\n"
-        "Смотри, что я умею:\n"
-        "💸 — Добавлять расходы\n"
-        "💰 — Добавлять доходы\n"
-        "📊 — Показывать баланс\n"
-        "➕ — Добавлять предстоящие операции\n"
-        "📋 — Показывать список операций\n"
-        "📅 — Делать прогноз баланса",
-        reply_markup=reply_markup
+    user_first_name = update.message.from_user.first_name or ""
+    welcome_text = (
+        f"Привет, *{user_first_name}*! 👋\n\n"
+        "Смотри, что я умею:\n\n"
+        "📊 Показать текущий баланс\n"
+        "🗓 Прогнозировать будущий баланс\n"
+        "➕ Добавлять доходы и расходы / предстоящие операции\n"
+        "📋 Смотреть историю операций\n\n"
+        "*Просто нажми на нужную кнопку, чтобы начать!*"
     )
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=main_menu(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return CHOOSING_ACTION
 
+# ======== Баланс и история ========
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = load_balance()
     await update.message.reply_text(f"Ваш текущий баланс: {balance} ₽")
 
-# ======== Добавление доходов/расходов ========
-async def add_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введите сумму дохода:")
-    return CHOOSING_INCOME
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    history = load_history()
+    if not history:
+        await update.message.reply_text("История операций пуста.")
+    else:
+        text = "История операций:\n"
+        for op in history:
+            text += f"{op['type']}: {op['amount']} ₽\n"
+        await update.message.reply_text(text)
 
-async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введите сумму расхода:")
-    return CHOOSING_EXPENSE
+# ======== Прогноз ========
+async def forecast_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    balance = load_balance()
+    future = load_future()
+    for op in future:
+        if op["type"] == "доход":
+            balance += op["amount"]
+        elif op["type"] == "расход":
+            balance -= op["amount"]
+    await update.message.reply_text(f"Прогнозируемый баланс: {balance} ₽")
 
-async def add_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ======== Мгновенные операции ========
+async def add_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text)
-        balance = load_balance()
-        balance += amount
+        balance = load_balance() + amount
         save_balance(balance)
-        await update.message.reply_text(f"Доход добавлен ✅ Новый баланс: {balance} ₽")
+        history = load_history()
+        history.append({"type": "доход", "amount": amount})
+        save_history(history)
+        await update.message.reply_text(f"Доход добавлен. Новый баланс: {balance} ₽", reply_markup=add_operation_menu())
     except ValueError:
         await update.message.reply_text("Введите корректное число.")
         return CHOOSING_INCOME
-    return ConversationHandler.END
+    return CHOOSING_ACTION
 
-async def add_expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text)
-        balance = load_balance()
-        balance -= amount
+        balance = load_balance() - amount
         save_balance(balance)
-        await update.message.reply_text(f"Расход добавлен ✅ Новый баланс: {balance} ₽")
+        history = load_history()
+        history.append({"type": "расход", "amount": amount})
+        save_history(history)
+        await update.message.reply_text(f"Расход добавлен. Новый баланс: {balance} ₽", reply_markup=add_operation_menu())
     except ValueError:
         await update.message.reply_text("Введите корректное число.")
         return CHOOSING_EXPENSE
-    return ConversationHandler.END
+    return CHOOSING_ACTION
 
 # ======== Предстоящие операции ========
-async def future_operation_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["Предстоящий доход", "Предстоящий расход"], ["Отмена"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text(
-        "Выберите тип предстоящей операции:\n\n"
-        "Введите в формате: СУММА;НАЗВАНИЕ;ГГГГ-ММ-ДД",
-        reply_markup=reply_markup
-    )
-
-async def add_future_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введите доход в формате: СУММА;НАЗВАНИЕ;ГГГГ-ММ-ДД")
-    return CHOOSING_FUTURE_INCOME
-
-async def add_future_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введите расход в формате: СУММА;НАЗВАНИЕ;ГГГГ-ММ-ДД")
-    return CHOOSING_FUTURE_EXPENSE
-
-async def save_future_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amount, name, date_str = update.message.text.split(";")
-        amount = float(amount)
-        date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
-        operations = load_future_operations()
-        operations.append({"type": "income", "amount": amount, "name": name.strip(), "date": str(date)})
-        save_future_operations(operations)
-        await update.message.reply_text("Предстоящий доход добавлен ✅")
-    except Exception:
-        await update.message.reply_text("Ошибка! Введите в формате: СУММА;НАЗВАНИЕ;ГГГГ-ММ-ДД")
-        return CHOOSING_FUTURE_INCOME
-    return ConversationHandler.END
-
-async def save_future_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amount, name, date_str = update.message.text.split(";")
-        amount = float(amount)
-        date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
-        operations = load_future_operations()
-        operations.append({"type": "expense", "amount": amount, "name": name.strip(), "date": str(date)})
-        save_future_operations(operations)
-        await update.message.reply_text("Предстоящий расход добавлен ✅")
-    except Exception:
-        await update.message.reply_text("Ошибка! Введите в формате: СУММА;НАЗВАНИЕ;ГГГГ-ММ-ДД")
-        return CHOOSING_FUTURE_EXPENSE
-    return ConversationHandler.END
-
-# ======== Список предстоящих операций ========
-async def list_operations(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    operations = load_future_operations()
-    if not operations:
-        await update.message.reply_text("Список операций пуст.")
-        return
-
-    msg = "📋 Список операций:\n\n"
-    for op in operations:
-        emoji = "💰" if op["type"] == "income" else "💸"
-        msg += f"{emoji} {op['name']} — {op['amount']} ₽ (дата: {op['date']})\n"
-    await update.message.reply_text(msg)
-
-# ======== Прогноз баланса ========
-async def forecast_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    balance = load_balance()
-    operations = load_future_operations()
-    if not operations:
-        await update.message.reply_text(f"📅 Прогнозируемый баланс: {balance} ₽ (операций нет)")
-        return
-
-    forecast = balance
-    for op in operations:
-        if op["type"] == "income":
-            forecast += op["amount"]
+async def handle_future_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text in ["➕ Предстоящий доход", "➖ Предстоящий расход"]:
+        context.user_data["future_type"] = "доход" if "доход" in text else "расход"
+        await update.message.reply_text("Введите сумму и дату в формате: сумма на YYYY-MM-DD")
+        return FUTURE_AMOUNT_DATE
+    elif text == "📋 Список предстоящих":
+        future = load_future()
+        if not future:
+            await update.message.reply_text("Список предстоящих операций пуст.")
         else:
-            forecast -= op["amount"]
+            text_list = "Список предстоящих операций:\n"
+            for op in future:
+                text_list += f"{op['type']}: {op['amount']} ₽ на {op['date']}\n"
+            await update.message.reply_text(text_list)
+        return FUTURE_MENU
+    elif text == "🔙 Назад":
+        await update.message.reply_text("Возврат в меню 'Добавить операцию'", reply_markup=add_operation_menu())
+        return CHOOSING_ACTION
 
-    await update.message.reply_text(f"📅 Прогнозируемый баланс: {forecast} ₽")
+async def add_future_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount_str, date_str = update.message.text.split("на")
+        amount = float(amount_str.strip())
+        date = date_str.strip()
+        op_type = context.user_data.get("future_type")
+        future = load_future()
+        future.append({"type": op_type, "amount": amount, "date": date})
+        save_future(future)
+        await update.message.reply_text(f"Предстоящая операция добавлена: {op_type} {amount} ₽ на {date}", reply_markup=future_menu())
+    except Exception:
+        await update.message.reply_text("Неправильный формат. Используйте: сумма на YYYY-MM-DD")
+    return FUTURE_MENU
 
-# ======== Отмена ========
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Действие отменено.")
-    return ConversationHandler.END
+# ======== Основной ConversationHandler ========
+async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "➕ Добавить операцию":
+        await update.message.reply_text("Меню операций:", reply_markup=add_operation_menu())
+        return CHOOSING_ACTION
+    elif text == "➕ Добавить доход":
+        await update.message.reply_text("Введите сумму дохода:")
+        return CHOOSING_INCOME
+    elif text == "➖ Добавить расход":
+        await update.message.reply_text("Введите сумму расхода:")
+        return CHOOSING_EXPENSE
+    elif text == "⏳ Добавить предстоящую операцию":
+        await update.message.reply_text("Меню предстоящих операций:", reply_markup=future_menu())
+        return FUTURE_MENU
+    elif text == "📊 Баланс":
+        await show_balance(update, context)
+        return CHOOSING_ACTION
+    elif text == "📋 История":
+        await show_history(update, context)
+        return CHOOSING_ACTION
+    elif text == "🗓 Прогноз баланса":
+        await forecast_balance(update, context)
+        return CHOOSING_ACTION
+    elif text == "🔙 Назад":
+        await update.message.reply_text("Возврат в главное меню", reply_markup=main_menu())
+        return CHOOSING_ACTION
+    return CHOOSING_ACTION
 
-# ======== Запуск приложения ========
-app = ApplicationBuilder().token("8390399537:AAH3JU0sd35q-JmPn7pHTg1Z1vCTq6kdW4Y").build()
+# ======== Настройка приложения ========
+app = ApplicationBuilder().token(API_TOKEN).build()
 
-# Команды и кнопки
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.Regex("📊 Баланс"), show_balance))
-app.add_handler(MessageHandler(filters.Regex("📋 Список операций"), list_operations))
-app.add_handler(MessageHandler(filters.Regex("📅 Прогноз баланса"), forecast_balance))
-app.add_handler(MessageHandler(filters.Regex("➕ Добавить предстоящие операции"), future_operation_start))
-
-# ConversationHandler для доходов
-income_handler = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("💰 Добавить доход"), add_income_start)],
-    states={CHOOSING_INCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_income_amount)]},
-    fallbacks=[CommandHandler("cancel", cancel)]
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        CHOOSING_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_action)],
+        CHOOSING_INCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_income)],
+        CHOOSING_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense)],
+        FUTURE_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_future_menu)],
+        FUTURE_AMOUNT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_future_operation)],
+    },
+    fallbacks=[]
 )
 
-expense_handler = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("💸 Добавить расход"), add_expense_start)],
-    states={CHOOSING_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense_amount)]},
-    fallbacks=[CommandHandler("cancel", cancel)]
-)
-
-future_income_handler = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("Предстоящий доход"), add_future_income)],
-    states={CHOOSING_FUTURE_INCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_future_income)]},
-    fallbacks=[CommandHandler("cancel", cancel)]
-)
-
-future_expense_handler = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("Предстоящий расход"), add_future_expense)],
-    states={CHOOSING_FUTURE_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_future_expense)]},
-    fallbacks=[CommandHandler("cancel", cancel)]
-)
-
-app.add_handler(income_handler)
-app.add_handler(expense_handler)
-app.add_handler(future_income_handler)
-app.add_handler(future_expense_handler)
-
+app.add_handler(conv_handler)
 app.run_polling()
